@@ -73,7 +73,7 @@ class BinwalkScanner(BaseScanner):
 
         try:
             subprocess.run(
-                [BINWALK_CMD, "-eM", "-o", "0", "-C", str(sig_dir), str(firmware_path)],
+                [BINWALK_CMD, "-eM", "--run-as=root", "-o", "0", "-C", str(sig_dir), str(firmware_path)],
                 capture_output=True,
                 timeout=BINWALK_TIMEOUT,
                 check=False,
