@@ -1,0 +1,14 @@
+# Core
+pwntools
+requests
+
+# Optional: file type identification
+magika
+
+# Optional: static disassembly
+angr
+r2pipe
+
+# Optional: Ghidra (install separately)
+# https://github.com/NationalSecurityAgency/ghidra
+# After installing, ensure analyzeHeadless is in PATH

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "router-analysis"
+version = "4.0.0"
+description = "Automated router firmware security analysis: Magika + binwalk + CVE + static disassembly"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Router_analysis Contributors" },
+]
+keywords = ["firmware", "security", "router", "iot", "cve", "binwalk", "ghidra", "reverse-engineering"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Information Technology",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+dependencies = [
+    "pwntools",
+    "requests",
+]
+
+[project.optional-dependencies]
+full = [
+    "angr",
+    "r2pipe",
+    "magika",
+]
+ghidra = [
+    "ghidra",
+]
+
+[project.scripts]
+router-analysis = "router_analysis.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Lx-autopwn/AutoPwn"
+Repository = "https://github.com/Lx-autopwn/AutoPwn"
+
+[tool.setuptools.packages.find]
+include = ["router_analysis*"]
