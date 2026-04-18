@@ -9,6 +9,7 @@ from pathlib import Path
 from autopwn import __version__
 from router_analysis.context import FirmwareContext
 from router_analysis.engine.engine import PhasedFirmwareEngine
+from pwn import log as pwn_log
 from router_analysis.output.logger import banner, setup_logger
 
 
@@ -100,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Validate firmware file
     if not Path(args.firmware).exists():
-        log.error(f"File not found: {args.firmware}")
+        pwn_log.error(f"File not found: {args.firmware}")
         return 1
 
     # Build context
@@ -115,11 +116,9 @@ def main(argv: list[str] | None = None) -> int:
         engine = PhasedFirmwareEngine(ctx, args)
         exit_code = engine.run()
     except FileNotFoundError as exc:
-        from pwn import log as pwn_log
         pwn_log.failure(str(exc))
         return 1
     except Exception as exc:
-        from pwn import log as pwn_log
         pwn_log.failure(f"Fatal error: {exc}")
         return 1
 
@@ -130,7 +129,6 @@ def main(argv: list[str] | None = None) -> int:
         out_path = Path(args.json_report)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(report_data, indent=2, default=str))
-        from pwn import log as pwn_log
         pwn_log.info(f"JSON report written to {out_path}")
 
     return exit_code
