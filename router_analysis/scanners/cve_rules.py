@@ -97,25 +97,56 @@ BUILTIN_RULES: list[dict[str, Any]] = [
                 "libigd*",
                 "ssdp*",
                 "*upnp*",
+                # 新增：更多可能的变体名
+                "upnp",
+                "IGD",
+                "daemon*upnp*",
+                "*miniupnp*",
+                "*igd*",
             ],
             # 任意版本均受影响（留空 = 无版本限制）
             "version_range": {},
             "subsystem": ["upnp", "ssdp", "igd"],
+            # 新增：路径关键字检测（固件中常见路径）
+            "path_keywords": [
+                "upnp",
+                "ssdp",
+                "igd",
+                "minihttpd",
+                "natpmp",
+                "/usr/sbin/",
+                "/usr/bin/upnp",
+                "/lib/upnp",
+                "/etc/upnp",
+            ],
+            # 新增：二进制内容特征（扫描所有 ELF 的字符串）
+            "scan_all_binaries": True,  # 强制扫描所有 ELF 是否含 upnp 特征
+            "binary_string_signatures": [
+                "miniupnpd",
+                "miniigd",
+                "SSDP notify",
+                "HTTP/1.1",
+                "M-SEARCH",
+                "ssdp:all",
+                "urn:schemas-upnp-org",
+                " urn:",
+            ],
         },
         # 反汇编代码层：检测危险函数调用模式
         "code_patterns": [
             {
                 # SSDP 解析中 recv 后直接 strcpy/strncpy 无长度校验
                 "type": "stack_buffer_overflow",
-                "pattern": r"recv.*?\n.*?strcpy",
+                "pattern": r"recv\s*\([^)]*\).*?\n.*?strcpy",
                 "description": "recv 接收数据后直接 strcpy，无长度校验",
                 "severity": "CONFIRMED",
                 "match_mode": "cross_function",
+                "context_lines": 5,  # 扩大上下文以捕获 recv->strcpy 模式
             },
             {
                 # strlen 结果未经验证即作为 memcpy/strcpy 的长度参数
                 "type": "stack_buffer_overflow",
-                "pattern": r"strlen.*?\n.*?(strcpy|memcpy|strncpy)",
+                "pattern": r"strlen\s*\([^)]*\).*?\n.*?(strcpy|memcpy|strncpy|sprintf)",
                 "description": "strlen 结果未验证即作为复制长度",
                 "severity": "CONFIRMED",
                 "match_mode": "cross_function",
@@ -123,7 +154,7 @@ BUILTIN_RULES: list[dict[str, Any]] = [
             {
                 # 直接用 recv 的返回值作为 memcpy 长度
                 "type": "stack_buffer_overflow",
-                "pattern": r"recv\([^)]*\)\s*;?\s*\n\s*(memcpy|strcpy)",
+                "pattern": r"recv\s*\([^)]*\)\s*;?\s*\n\s*(memcpy|strcpy|strncpy|sprintf)",
                 "description": "recv 返回值未校验即用于内存复制",
                 "severity": "CONFIRMED",
                 "match_mode": "cross_function",
@@ -131,18 +162,35 @@ BUILTIN_RULES: list[dict[str, Any]] = [
             {
                 # 固定大小栈缓冲区 + 危险写入函数
                 "type": "stack_buffer_overflow",
-                "pattern": r"sub\s+sp,\s*0x[0-9a-f]+\s*;.*?(strcpy|gets)",
+                "pattern": r"sub\s+(sp|rsp),\s*0x[0-9a-f]+\s*;.*?(strcpy|strcat|memcpy|gets|sprintf)",
                 "description": "栈分配后存在未绑定的字符串写入",
                 "severity": "LIKELY",
                 "match_mode": "local",
             },
             {
-                # SSDP 关键字 + 危险函数
+                # SSDP 关键字 + 危险函数组合
                 "type": "ssdp_vulnerability",
-                "pattern": r"(NOTIFY|SSDP|M-SEARCH|HTTP/1\.1).*?(strcpy|gets|sprintf)",
+                "pattern": r"(NOTIFY|SSDP|M-SEARCH|HTTP/1\.1|ST:|HOST:|MAN:).*?(strcpy|gets|sprintf|memcpy)",
                 "description": "SSDP 协议处理路径存在危险函数",
                 "severity": "LIKELY",
                 "match_mode": "string",
+            },
+            {
+                # 缓冲区大小定义后立即进行不安全复制
+                "type": "buffer_no_check",
+                "pattern": r"(0x[0-9a-f]+|0x[0-9a-f]+\s*,\s*[0-9]+).*?\n.*?(strcpy|memcpy)\s*\([^,]+,\s*[^,]+,\s*[^)]*\)",
+                "description": "缓冲区定义后立即进行可能无边界检查的复制",
+                "severity": "LIKELY",
+                "match_mode": "local",
+            },
+            {
+                # 危险函数：无边界检查的字符串操作
+                "type": "dangerous_string_op",
+                "pattern": r"\b(strcpy|strcat|gets|sprintf)\s*\([^,]+,\s*[^,)]+\)",
+                "description": "检测到无边界检查的字符串复制函数",
+                "severity": "CONFIRMED",
+                "match_mode": "single_function",
+                "dangerous_funcs": ["strcpy", "strcat", "gets", "sprintf"],
             },
         ],
         # 字符串/特征层：检测固件中是否存在易受攻击的字符串
@@ -150,20 +198,59 @@ BUILTIN_RULES: list[dict[str, Any]] = [
             {
                 "pattern": r"miniupnpd?",
                 "description": "命中 miniupnpd 进程名",
+                "severity": "CONFIRMED",
             },
             {
                 "pattern": r"NOTIFY\s+/[^/\s]+(?:\s+HTTP)",
                 "description": "命中 SSDP NOTIFY 格式字符串",
+                "severity": "CONFIRMED",
             },
             {
-                "pattern": r"(?:ST|HOST|MAN):\s*['\"]?[^'\"]{128,}",
+                "pattern": r"(?:ST|HOST|MAN):\s*['\"]?[^\s'\"]{128,}",
                 "description": "超长 SSDP 头字段（漏洞触发点）",
+                "severity": "CONFIRMED",
             },
             {
-                "pattern": r"ssdp:all|MediaRenderer|urn:schemas-",
+                "pattern": r"ssdp:all|MediaRenderer|urn:schemas-upnp-org|urn:",
                 "description": "UPnP/SSDP 设备标识字符串",
+                "severity": "CONFIRMED",
+            },
+            {
+                "pattern": r"HTTP/1\.(0|1)\s+200\s+OK",
+                "description": "SSDP/HTTP 响应标识",
+                "severity": "POSSIBLE",
+            },
+            {
+                "pattern": r"( multicast|ssdp|upnp)[\s\S]{0,50}(recv|strcpy|memcpy)",
+                "description": "网络接收后紧接不安全的内存操作",
+                "severity": "LIKELY",
+            },
+            {
+                "pattern": r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+.*?(notify|m-search)",
+                "description": "UPnP/SSDP 网络地址特征",
+                "severity": "POSSIBLE",
             },
         ],
+        # 新增：函数级别分析规则
+        "function_patterns": {
+            # 易受攻击的函数名（可能被重命名混淆）
+            "suspicious_functions": [
+                "ProcessHttpRequest",
+                "HandleSSDP",
+                "ParseNOTIFY",
+                "ParseSSDPPacket",
+                "HandleM-SEARCH",
+                "ProcessUPnPRequest",
+                "parse_description",
+                "process_request",
+                "handle_request",
+            ],
+            "dangerous_includes": [
+                "<string.h>",
+                "<strings.h>",
+                "<stdio.h>",
+            ],
+        },
         "references": [
             "https://nvd.nist.gov/vuln/detail/CVE-2021-27239",
             "https://www.exploit-db.com/exploits/50013",
@@ -278,6 +365,52 @@ class CVEMatcher:
 
         return results
 
+    def match_all_binaries_for_signatures(
+        self,
+        identified_files: list["IdentifiedFile"],
+        binary_strings_map: dict[str, list[str]],
+    ) -> list[dict[str, Any]]:
+        """扫描所有 ELF 二进制文件的字符串，查找特定 CVE 规则的特征签名。
+
+        用于 scan_all_binaries=True 的规则，主动搜索所有二进制文件。
+        """
+        results: list[dict[str, Any]] = []
+
+        for rule in self.rules:
+            match_config = rule.get("match", {})
+            if not match_config.get("scan_all_binaries"):
+                continue
+
+            signatures = match_config.get("binary_string_signatures", [])
+            if not signatures:
+                continue
+
+            # 扫描每个二进制的字符串
+            for comp in identified_files:
+                if comp.magika_label != "ELF":
+                    continue
+
+                strings = binary_strings_map.get(comp.path, [])
+                matched_sigs = []
+                for sig in signatures:
+                    for s in strings:
+                        if sig.lower() in s.lower():
+                            matched_sigs.append(sig)
+                            break
+
+                if matched_sigs:
+                    # 找到了特征签名，标记为潜在漏洞
+                    results.append({
+                        "rule": rule,
+                        "confidence": "possible",
+                        "component": Path(comp.path).name,
+                        "affected_binary": comp.path,
+                        "matched_signatures": matched_sigs,
+                        "match_type": "binary_signature_scan",
+                    })
+
+        return results
+
     def _match_rule(self, rule: dict, comp: "IdentifiedFile") -> dict | None:
         from router_analysis.context import IdentifiedFile
 
@@ -302,7 +435,18 @@ class CVEMatcher:
         if not subsystem_ok:
             return None
 
-        # 4. 代码模式匹配（基于反汇编结果，在 run() 时填充）
+        # 4. 路径关键字匹配（可选）
+        path_ok = True
+        path_keywords = rule.get("match", {}).get("path_keywords")
+        if path_keywords:
+            path_ok = any(
+                kw.lower() in comp.path.lower()
+                for kw in path_keywords
+            )
+        if not path_ok:
+            return None
+
+        # 5. 代码模式匹配（基于反汇编结果，在 run() 时填充）
         code_match = rule.get("code_patterns", [])
         string_match = rule.get("string_patterns", [])
 
@@ -346,25 +490,32 @@ class CVEMatcher:
     ) -> str:
         """
         计算置信度：
-          confirmed  = 版本命中 AND 代码模式 CONFIRMED 命中
-          likely     = 版本命中 OR 代码模式 LIKELY 命中
-          possible   = 字符串模式命中 OR 组件名命中
+          confirmed  = 版本命中 AND (代码模式 CONFIRMED 命中 OR 字符串模式 CONFIRMED)
+          likely     = 版本命中 AND 代码模式 LIKELY 命中
+          possible   = 字符串模式命中 OR 组件名命中 OR scan_all_binaries 命中
           none       = 无任何匹配
         """
         if not code_patterns and not string_patterns:
             # 纯版本规则：version_ok 即 possible
+            # 但如果有 binary_string_signatures，也算 possible
+            match_config = rule.get("match", {})
+            if match_config.get("scan_all_binaries") and match_config.get("binary_string_signatures"):
+                return "possible"
             return "possible" if version_ok else "none"
 
         has_confirmed_code = any(p.get("severity") == "CONFIRMED" for p in code_patterns)
         has_likely_code = any(p.get("severity") in ("CONFIRMED", "LIKELY") for p in code_patterns)
+        has_confirmed_string = any(p.get("severity") == "CONFIRMED" for p in string_patterns)
         has_string = bool(string_patterns)  # string_patterns 存在即命中
 
-        if version_ok and has_confirmed_code:
+        if version_ok and (has_confirmed_code or has_confirmed_string):
             return "confirmed"
         if version_ok and has_likely_code:
             return "likely"
-        if has_confirmed_code or has_likely_code:
-            return "possible"
+        if has_confirmed_code or has_confirmed_string:
+            return "confirmed"
+        if has_likely_code:
+            return "likely"
         if has_string:
             return "possible"
 
